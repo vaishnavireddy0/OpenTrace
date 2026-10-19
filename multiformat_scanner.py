@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 from pathlib import PurePosixPath
 
 MAX_FILES = 500
-MAX_FILE_BYTES = 1024 * 1024
+MAX_FILE_BYTES = 10 * 1024 * 1024
 MAX_EXPANDED_BYTES = 24 * 1024 * 1024
 
 CODE_EXTENSIONS = {
