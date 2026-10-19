@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+
+# Virtual environment
+venv/
+.venv/
+
+# Environment secrets
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# Test and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.log
