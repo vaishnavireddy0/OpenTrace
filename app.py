@@ -4,6 +4,7 @@ import json
 import zipfile
 from datetime import datetime
 from flask import Flask, request, render_template_string, jsonify
+from multiformat_scanner import scan_uploads
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 12 * 1024 * 1024
@@ -285,24 +286,26 @@ header{padding:18px 5%}main{margin-top:30px}}
   </section>
 
   <section class="panel">
-    <h2 style="margin-top:0">Analyze a Python project</h2>
-    <p class="small">Upload a ZIP containing .py files. OpenTrace reads source
-    code as text and parses its syntax; it does not execute uploaded code.</p>
+    <h2 style="margin-top:0">Analyze your files</h2>
+    <p class="small">Upload supported source files, documents, spreadsheets,
+    presentations, images, or a ZIP archive. OpenTrace performs static
+    analysis only and never executes uploaded files.</p>
     <div class="upload">
       <form class="drop" action="/scan" method="post" enctype="multipart/form-data">
-        <label for="project">Project ZIP file</label>
-        <input id="project" type="file" name="project" accept=".zip" required>
-        <button type="submit">Analyze project ↗</button>
+        <label for="files">Choose files or ZIP archives</label>
+        <input id="files" type="file" name="files" multiple required
+          accept=".zip,.py,.js,.jsx,.ts,.tsx,.java,.c,.h,.cpp,.hpp,.cs,.go,.rs,.php,.rb,.swift,.kt,.html,.htm,.css,.scss,.vue,.svelte,.sh,.bash,.sql,.r,.m,.pl,.lua,.dart,.json,.xml,.svg,.yaml,.yml,.toml,.ini,.cfg,.conf,.csv,.tsv,.txt,.md,.rst,.log,.properties,.gradle,.make,.dockerfile,.pdf,.docx,.xlsx,.pptx,.png,.jpg,.jpeg,.gif,.webp,.bmp,.tif,.tiff,.exe,.dll,.so,.dylib,.bin,.wasm,.jar">
+        <button type="submit">Analyze files ↗</button>
       </form>
       <div class="drop">
         <label>Explore a sample project</label>
-        <p class="small">See how the report works using built-in example code.</p>
+        <p class="small">Try the built-in example without uploading anything.</p>
         <a class="button secondary" href="/demo">Run sample analysis</a>
       </div>
     </div>
-    <div class="notice">Prototype note: these are static code-quality signals,
-    not proof of security or full code correctness. Do not upload confidential
-    source code to a shared or publicly hosted instance.</div>
+    <div class="notice">Format support varies. PDF text extraction may not work
+    on scanned documents; image OCR is not enabled. Binary files are not
+    executed. Do not upload confidential files to a shared or public instance.</div>
   </section>
 
   {% if report %}
@@ -401,61 +404,43 @@ def demo():
 
 @app.post("/scan")
 def scan():
-    upload = request.files.get("project")
-    if not upload or not upload.filename:
-        return "Please select a ZIP file.", 400
+    uploads = request.files.getlist("files")
 
-    if not upload.filename.lower().endswith(".zip"):
-        return "Please upload a .zip file containing Python source files.", 400
+    # Accept the old field name too, so older forms remain compatible.
+    if not uploads or not any(item.filename for item in uploads):
+        old_upload = request.files.get("project")
+        uploads = [old_upload] if old_upload and old_upload.filename else []
 
-    data = upload.read(app.config["MAX_CONTENT_LENGTH"] + 1)
-    if len(data) > app.config["MAX_CONTENT_LENGTH"]:
-        return "Upload is too large. Maximum size is 12 MB.", 413
+    uploads = [item for item in uploads if item and item.filename]
+    if not uploads:
+        return "Please select at least one file to analyze.", 400
+
+    prepared = []
+    total_size = 0
+    max_size = app.config["MAX_CONTENT_LENGTH"]
+
+    for item in uploads:
+        remaining = max_size - total_size
+        if remaining <= 0:
+            return "Combined upload size exceeds the 12 MB limit.", 413
+
+        raw = item.stream.read(remaining + 1)
+        total_size += len(raw)
+        if total_size > max_size:
+            return "Combined upload size exceeds the 12 MB limit.", 413
+
+        prepared.append((item.filename, raw))
 
     try:
-        archive = zipfile.ZipFile(io.BytesIO(data))
-    except (zipfile.BadZipFile, OSError):
-        return "This ZIP file could not be opened.", 400
+        report = scan_uploads(prepared, analyze_source)
+    except Exception:
+        app.logger.exception("OpenTrace scan failed")
+        return "The scan could not be completed. Check the server terminal for details.", 500
 
-    python_files = {}
-    try:
-        for entry in archive.infolist():
-            if entry.is_dir() or not entry.filename.endswith(".py"):
-                continue
-            if len(python_files) >= MAX_FILES:
-                break
-            if entry.file_size > MAX_FILE_BYTES:
-                continue
-            if entry.file_size < 0:
-                continue
+    if not report.get("files"):
+        return "No supported files could be analyzed. Try a supported file or ZIP archive.", 400
 
-            # Ignore absolute paths and traversal-like ZIP entries.
-            parts = entry.filename.replace("\\", "/").split("/")
-            if entry.filename.startswith("/") or ".." in parts:
-                continue
-
-            try:
-                raw = archive.read(entry)
-                if len(raw) > MAX_FILE_BYTES:
-                    continue
-                source = raw.decode("utf-8")
-            except (UnicodeDecodeError, zipfile.BadZipFile, OSError, RuntimeError):
-                continue
-
-            python_files[entry.filename] = source
-    finally:
-        archive.close()
-
-    if not python_files:
-        return (
-            "No readable Python (.py) files found. "
-            "Upload a ZIP containing Python source files.",
-            400,
-        )
-
-    report = scan_files(python_files)
     return render_template_string(PAGE, report=report)
-
 
 @app.errorhandler(413)
 def too_large(_error):
